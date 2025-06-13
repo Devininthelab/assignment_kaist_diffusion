@@ -237,7 +237,7 @@ class DiffusionModule(nn.Module):
     def compute_loss(self, x0):
         """
         The simplified noise matching loss corresponding Equation 14 in DDPM paper.
-
+        This loss is used to train the noise estimating network.
         Input:
             x0 (`torch.Tensor`): clean data
         Output:
@@ -257,6 +257,41 @@ class DiffusionModule(nn.Module):
         eps_theta = self.network(xt, t)
         loss = F.mse_loss(eps_theta, noise, reduction="mean")
         ######################
+        return loss
+    
+    @torch.no_grad()
+    def muy_tilda(self, x_t, x0, t):
+        """
+        Compute the muy_tilda in Equation 1 in slide 12 lecture 4. 
+        """
+        
+        # Use extract function for proper batch handling
+        alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, x0)
+        alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t-1, x0)
+        betas_t = extract(self.var_scheduler.betas, t, x0)
+        
+        weighting_term_xt = alphas_cumprod_t.sqrt() * (1.0 - alphas_cumprod_t_prev) / (1.0 - alphas_cumprod_t)
+        weighting_term_x0 = alphas_cumprod_t_prev.sqrt() * betas_t / (1.0 - alphas_cumprod_t) 
+        weighting_term_x0 = weighting_term_x0.to(x0.device)
+        weighting_term_xt = weighting_term_xt.to(x0.device)
+        muy_tilda = weighting_term_xt * x_t + weighting_term_x0 * x0
+        return muy_tilda.to(x0.device)
+
+    def compute_loss_mean_predictor(self, x0):
+        """
+        Equation 1 in slide 12 lecture 4.
+        """
+        batch_size = x0.shape[0]
+        t = (
+            torch.randint(1, self.var_scheduler.num_train_timesteps, size=(batch_size,))
+            .to(x0.device)
+            .long()
+        ) # since we use t - 1, cannot use t = 0
+        noise = torch.randn_like(x0)
+        x_t = self.q_sample(x0, t, noise)  # Noisy data at timestep t
+        muy_tilda = self.muy_tilda(x_t, x0, t)
+        muy_theta = self.network(x_t, t)
+        loss = F.mse_loss(muy_theta, muy_tilda, reduction="mean")
         return loss
 
     def save(self, file_path):

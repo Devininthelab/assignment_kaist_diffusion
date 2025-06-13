@@ -8,13 +8,23 @@ import torch.nn.functional as F
 
 class TimeEmbedding(nn.Module):
     def __init__(self, hidden_size, frequency_embedding_size=256):
+        """
+        Time embedding module that creates sinusoidal embeddings
+        For a given time step t, first it sinusoidally embeds it into a frequency space of [frequency_embedding_size]
+        dimensions, then it passes the frequency embedding through a two-layer MLP to produce an output embedding.
+        Output embedding is of size hidden_size.
+
+        Take a time step t and returns an embedding of size hidden_size.
+        :param hidden_size: the size of the output embedding.
+        :param frequency_embedding_size: the size of the frequency embedding.
+        """
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(frequency_embedding_size, hidden_size, bias=True),
             nn.SiLU(),
             nn.Linear(hidden_size, hidden_size, bias=True),
         )
-        self.frequency_embedding_size = frequency_embedding_size
+        self.frequency_embedding_size = frequency_embedding_size 
 
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):
@@ -51,6 +61,13 @@ class TimeEmbedding(nn.Module):
 
 class TimeLinear(nn.Module):
     def __init__(self, dim_in: int, dim_out: int, num_timesteps: int):
+        """
+        A linear layer that applies a time-dependent scaling to the input.
+        Args:
+            dim_in: dimension of input
+            dim_out: dimension of output
+            num_timesteps: number of timesteps for time embedding
+        """
         super().__init__()
         self.dim_in = dim_in
         self.dim_out = dim_out
@@ -109,6 +126,7 @@ class SimpleNet(nn.Module):
         """
         ######## TODO ########
         # DO NOT change the code outside this part.
+        
         h = x
         for layer in self.net:
             if isinstance(layer, TimeLinear):
