@@ -12,14 +12,20 @@ class DiffusionModule(nn.Module):
         super().__init__()
         self.network = network
         self.var_scheduler = var_scheduler
+       
 
     def get_loss(self, x0, class_label=None, noise=None):
         ######## TODO ########
         # DO NOT change the code outside this part.
         # compute noise matching loss.
         B = x0.shape[0]
-        timestep = self.var_scheduler.uniform_sample_t(B, self.device)        
-        loss = x0.mean()
+        timestep = self.var_scheduler.uniform_sample_t(B, device=self.device)
+        if noise is None:
+            noise = torch.randn_like(x0)
+        x_t, noise = self.var_scheduler.add_noise(x0, timestep, noise)
+        noise_pred = self.network(x_t, timestep=timestep)
+        # The loss is the mean squared error between the predicted noise and the true noise.     
+        loss = F.mse_loss(noise_pred, noise)
         ######################
         return loss
     
@@ -64,8 +70,8 @@ class DiffusionModule(nn.Module):
                 #######################
             else:
                 noise_pred = self.network(x_t, timestep=t.to(self.device))
-
-            x_t_prev = self.var_scheduler.step(x_t, t, noise_pred)
+            
+            x_t_prev = self.var_scheduler.step(x_t, t.to(self.device), noise_pred)
 
             traj[-1] = traj[-1].cpu()
             traj.append(x_t_prev.detach())

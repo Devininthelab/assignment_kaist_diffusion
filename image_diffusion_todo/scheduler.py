@@ -74,7 +74,8 @@ class DDPMScheduler(BaseScheduler):
     def step(self, x_t: torch.Tensor, t: int, eps_theta: torch.Tensor):
         """
         One step denoising function of DDPM: x_t -> x_{t-1}.
-
+        p_sample
+        Line 4 in Algorithm 2 in the DDPM paper.
         Input:
             x_t (`torch.Tensor [B,C,H,W]`): samples at arbitrary timestep t.
             t (`int`): current timestep in a reverse process.
@@ -86,13 +87,23 @@ class DDPMScheduler(BaseScheduler):
         ######## TODO ########
         # DO NOT change the code outside this part.
         # Assignment 1. Implement the DDPM reverse step.
-        sample_prev = None
+        
+        noise = torch.randn_like(x_t) if t > 0 else torch.zeros_like(x_t)
+        alphas_cumprod_t = self._get_teeth(self.alphas_cumprod, t)
+        alphas_t = self._get_teeth(self.alphas, t)
+
+        weighting_term = (1 - alphas_t) / (1 - alphas_cumprod_t).sqrt()
+        sigma_t = self._get_teeth(self.sigmas, t)
+
+        sample_prev = 1.0 / alphas_t.sqrt() * (x_t - weighting_term * eps_theta) + sigma_t * noise
+
         #######################
         
         return sample_prev
     
     # https://nn.labml.ai/diffusion/ddpm/utils.html
     def _get_teeth(self, consts: torch.Tensor, t: torch.Tensor): # get t th const 
+        t = t.to(torch.int64)
         const = consts.gather(-1, t)
         return const.reshape(-1, 1, 1, 1)
     
@@ -104,7 +115,7 @@ class DDPMScheduler(BaseScheduler):
     ):
         """
         A forward pass of a Markov chain, i.e., q(x_t | x_0).
-
+        q(x_t | x_0) = N(x_t; sqrt(alpha_cum_prod_t) * x_0, (1 - alpha_cum_prod_t) * I)
         Input:
             x_0 (`torch.Tensor [B,C,H,W]`): samples from a real data distribution q(x_0).
             t: (`torch.IntTensor [B]`)
@@ -115,12 +126,14 @@ class DDPMScheduler(BaseScheduler):
         """
         
         if eps is None:
-            eps       = torch.randn(x_0.shape, device='cuda')
+            eps = torch.randn(x_0.shape, device='cuda')
 
         ######## TODO ########
         # DO NOT change the code outside this part.
         # Assignment 1. Implement the DDPM forward step.
-        x_t = None
+        #print(f"alphas_cumprod: {self.alphas_cumprod.shape}, t: {t.shape}")
+        alphas_cumprod_t = self._get_teeth(self.alphas_cumprod, t)
+        x_t = alphas_cumprod_t.sqrt() * x_0 + (1.0 - alphas_cumprod_t).sqrt() * eps 
         #######################
 
         return x_t, eps
