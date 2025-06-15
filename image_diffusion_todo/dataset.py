@@ -9,6 +9,13 @@ from PIL import Image
 
 
 def listdir(dname):
+    """
+    List all image files in a directory and its subdirectories.
+    Args:
+        dname (str): Directory name to search for images.
+    Returns:
+        list: List of image file paths.
+    """
     fnames = list(
         chain(
             *[
@@ -23,6 +30,15 @@ def listdir(dname):
 def tensor_to_pil_image(x: torch.Tensor, single_image=False):
     """
     x: [B,C,H,W]
+    Converts a tensor to a PIL image or a list of PIL images.
+    Args:
+        x (torch.Tensor): Input tensor of shape [B, C, H, W] or [C, H, W].
+        single_image (bool): If True, return a single PIL image; otherwise, return a list of PIL images.
+    Returns:
+        PIL.Image or list of PIL.Image: Converted image(s).
+
+    tensors are expected to be in the range [-1, 1].
+    x range 0,1  then map to 255
     """
     if x.ndim == 3:
         x = x.unsqueeze(0)
@@ -138,7 +154,7 @@ class AFHQDataModule(object):
             label_offset=self.label_offset,
         )
 
-        self.num_classes = self.train_ds.num_classes
+        self.num_classes = self.train_ds.num_classes # 3
 
     def _download_dataset(self):
         URL = "https://www.dropbox.com/s/t9l9o3vsx2jai3z/afhq.zip?dl=0"

@@ -23,24 +23,24 @@ class UNet(nn.Module):
         if use_cfg:
             assert num_classes is not None
             cdim = tdim
-            self.class_embedding = nn.Embedding(num_classes+1, cdim)
+            self.class_embedding = nn.Embedding(num_classes+1, cdim) # +1 for null class
 
         self.head = nn.Conv2d(3, ch, kernel_size=3, stride=1, padding=1)
         self.downblocks = nn.ModuleList()
         chs = [ch]  # record output channel when dowmsample for upsample
-        now_ch = ch
+        now_ch = ch # 128
         for i, mult in enumerate(ch_mult):
-            out_ch = ch * mult
-            for _ in range(num_res_blocks):
+            out_ch = ch * mult # 128, 256, 256, 256
+            for _ in range(num_res_blocks): # append 4 ResBlocks
                 self.downblocks.append(ResBlock(
                     in_ch=now_ch, out_ch=out_ch, tdim=tdim,
                     dropout=dropout, attn=(i in attn)))
                 now_ch = out_ch
                 chs.append(now_ch)
-            if i != len(ch_mult) - 1:
-                self.downblocks.append(DownSample(now_ch))
+            if i != len(ch_mult) - 1: # not the last block
+                self.downblocks.append(DownSample(now_ch)) # downsample by factor of 2
                 chs.append(now_ch)
-
+        
         self.middleblocks = nn.ModuleList([
             ResBlock(now_ch, now_ch, tdim, dropout, attn=True),
             ResBlock(now_ch, now_ch, tdim, dropout, attn=False),
@@ -93,7 +93,7 @@ class UNet(nn.Module):
 
         # Downsampling
         h = self.head(x)
-        hs = [h]
+        hs = [h] # store intermediate features for skip connections
         for layer in self.downblocks:
             h = layer(h, temb)
             hs.append(h)
@@ -103,7 +103,7 @@ class UNet(nn.Module):
         # Upsampling
         for layer in self.upblocks:
             if isinstance(layer, ResBlock):
-                h = torch.cat([h, hs.pop()], dim=1)
+                h = torch.cat([h, hs.pop()], dim=1) # concatenate along the depth dimension
             h = layer(h, temb)
         h = self.tail(h)
 

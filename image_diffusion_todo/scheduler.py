@@ -103,6 +103,14 @@ class DDPMScheduler(BaseScheduler):
     
     # https://nn.labml.ai/diffusion/ddpm/utils.html
     def _get_teeth(self, consts: torch.Tensor, t: torch.Tensor): # get t th const 
+        """
+        Get the t-th constant from a tensor of constants.
+        Args:
+            consts (`torch.Tensor [T]`): a tensor of constants.
+            t (`torch.IntTensor [B]`): a tensor of timesteps.
+        Returns:
+            const (`torch.Tensor [B,1,1,1]`): a tensor of constants at timestep t.
+        """
         t = t.to(torch.int64)
         const = consts.gather(-1, t)
         return const.reshape(-1, 1, 1, 1)

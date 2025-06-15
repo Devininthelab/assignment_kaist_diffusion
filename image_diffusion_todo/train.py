@@ -14,6 +14,9 @@ from pytorch_lightning import seed_everything
 from scheduler import DDPMScheduler
 from torchvision.transforms.functional import to_pil_image
 from tqdm import tqdm
+import wandb
+from PIL import Image
+import numpy as np
 
 matplotlib.use("Agg")
 
@@ -23,14 +26,50 @@ def get_current_time():
     return now
 
 
+def concat_images_horizontally(images):
+    widths, heights = zip(*(img.size for img in images))
+    total_width = sum(widths)
+    max_height = max(heights)
+    new_im = Image.new('RGB', (total_width, max_height))
+
+    x_offset = 0
+    for img in images:
+        new_im.paste(img, (x_offset, 0))
+        x_offset += img.width
+
+    return new_im
+
+def trajectory_to_video(traj):
+    """
+    Saves videos for each sample in the batch from a trajectory list.
+    
+    Args:
+        traj (List[torch.Tensor]): List of length T, each tensor shape [BS, C, H, W].
+        save_dir (str or Path): Directory to save video files.
+        fps (int): Frames per second for the output video.
+    """
+    T = len(traj)
+    BS, C, H, W = traj[0].shape
+    videos = []
+    for sample_idx in range(BS):
+        # Collect trajectory for the sample: list of [C, H, W] tensors
+        sample_traj = [traj[t][sample_idx].detach().cpu() for t in range(T)]  # length T
+        pil_images = tensor_to_pil_image(torch.stack(sample_traj), single_image=False)
+        # Convert each PIL image to numpy
+        frames = [np.array(img) for img in pil_images]  # each is [H, W, C]
+        video = np.stack(frames, axis=0)  # [T, H, W, C]
+        video = video.transpose(0, 3, 1, 2)  # [T, C, H, W]
+        videos.append(video)
+    return videos
+
 def main(args):
     """config"""
-    config = DotMap()
-    config.update(vars(args))
-    config.device = f"cuda:{args.gpu}"
-
+    config = DotMap() # for access like config.batch_size
+    config.update(vars(args)) # returns a dict of args, then convert to Dotmap
+    config.device = f"cuda:{args.gpu}" 
+ 
     now = get_current_time()
-    if args.use_cfg:
+    if args.use_cfg: # use classifier-free guidance
         save_dir = Path(f"results/cfg_diffusion-{args.sample_method}-{now}")
     else:
         save_dir = Path(f"results/diffusion-{args.sample_method}-{now}")
@@ -42,6 +81,14 @@ def main(args):
     with open(save_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
     """######"""
+
+    run = wandb.init(
+        entity="winvswon78-nanyang-technological-university-singapore",   
+        project="diffusion_ahq",
+        name=f"diffusion-{args.sample_method}-{now}",
+        config=config,
+        dir=save_dir,
+    )
 
     image_resolution = 64
     ds_module = AFHQDataModule(
@@ -83,7 +130,8 @@ def main(args):
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lambda t: min((t + 1) / config.warmup_steps, 1.0)
     )
-
+    
+    # Trainning 
     step = 0
     losses = []
     with tqdm(initial=step, total=config.train_num_steps) as pbar:
@@ -101,6 +149,21 @@ def main(args):
                 ddpm.save(f"{save_dir}/last.ckpt")
                 ddpm.train()
 
+            if step % config.sample_log_interval == 0:  # Fixed typo in sample_log_interval
+                ddpm.eval()
+                print()
+                print(f"Step {step}, logging samples to wandb.")
+                samples = ddpm.sample(batch_size=1, return_traj=True)
+                videos = trajectory_to_video(samples)
+                wandb_videos = []
+                for i, video in enumerate(videos):
+                    assert video.shape == (1001, 3, 64, 64), f"Expected video shape (1001, 3, 64, 64), got {video.shape}"
+                    wandb_videos.append(wandb.Video(video, fps=30, format="mp4"))
+                wandb.log(
+                    {f"samples_step_{step}": wandb_videos}, step=step
+                )
+                ddpm.train()
+    
             img, label = next(train_it)
             img, label = img.to(config.device), label.to(config.device)
             if args.use_cfg:  # Conditional, CFG training
@@ -113,6 +176,8 @@ def main(args):
             loss.backward()
             optimizer.step()
             scheduler.step()
+            wandb.log({"loss": loss.item()}, step=step)
+            wandb.log({"lr": scheduler.get_last_lr()[0]}, step=step)
             losses.append(loss.item())
 
             step += 1
@@ -122,7 +187,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument(
         "--train_num_steps",
         type=int,
@@ -131,6 +196,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--warmup_steps", type=int, default=200)
     parser.add_argument("--log_interval", type=int, default=200)
+    parser.add_argument("--sample_log_interval", type=int, default=10000)
     parser.add_argument(
         "--max_num_images_per_cat",
         type=int,
@@ -145,7 +211,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--beta_1", type=float, default=1e-4)
     parser.add_argument("--beta_T", type=float, default=0.02)
-    parser.add_argument("--seed", type=int, default=63)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--image_resolution", type=int, default=64)
     parser.add_argument("--sample_method", type=str, default="ddpm")
     parser.add_argument("--use_cfg", action="store_true")

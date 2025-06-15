@@ -12,6 +12,10 @@ class Swish(nn.Module):
 
 
 class DownSample(nn.Module):
+    """
+    Downsample block with a convolutional layer. 
+    It reduces the spatial dimensions of the input tensor by a factor of 2.
+    """
     def __init__(self, in_ch):
         super().__init__()
         self.main = nn.Conv2d(in_ch, in_ch, 3, stride=2, padding=1)
@@ -27,6 +31,10 @@ class DownSample(nn.Module):
 
 
 class UpSample(nn.Module):
+    """
+    Upsample block with a convolutional layer.
+    It increases the spatial dimensions of the input tensor by a factor of 2 using nearest neighbor interpolation.
+    """
     def __init__(self, in_ch):
         super().__init__()
         self.main = nn.Conv2d(in_ch, in_ch, 3, stride=1, padding=1)
@@ -44,6 +52,13 @@ class UpSample(nn.Module):
 
 
 class AttnBlock(nn.Module):
+    """
+    Attention block that applies group normalization and a convolutional layer to the input tensor.
+    It computes attention weights and applies them to the input tensor.
+    Shape
+    of input tensor: [B, C, H, W]
+    output shape: [B, C, H, W]
+    """
     def __init__(self, in_ch):
         super().__init__()
         self.group_norm = nn.GroupNorm(32, in_ch)
