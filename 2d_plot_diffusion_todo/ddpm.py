@@ -106,7 +106,7 @@ class DiffusionModule(nn.Module):
         return xt
 
     @torch.no_grad()
-    def p_sample(self, xt, t):
+    def p_sample(self, xt, t, use_sigma_is_beta=False):
         """
         One step denoising function of DDPM: x_t -> x_{t-1}.
         
@@ -129,25 +129,47 @@ class DiffusionModule(nn.Module):
         
         x_t_prev = (xt - eps_factor * eps_theta) * (1.0 / extract(self.var_scheduler.alphas, t, xt).sqrt()) 
         
+        noise = torch.randn_like(xt)
+
         if t.ndim > 0 and t.shape[0] > 1:
             # handle batch of timesteps cases
             noise_cond = t > 0
-            noise = torch.randn_like(xt)
-            noise = noise * extract(self.var_scheduler.betas, t, xt).sqrt()
+
+            if use_sigma_is_beta:
+                # This line try to implement sigma_t ** 2 = ((1 - alpha_bar_{t-1}) / (1 - alpha_bar_t)) * beta_t
+                alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t - 1, xt)
+                alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, xt)
+                beta_t = extract(self.var_scheduler.betas, t, xt)
+                sigma_t = ((1 - alphas_cumprod_t_prev) / (1 - alphas_cumprod_t)) * beta_t
+                noise_scaled = noise * sigma_t.sqrt()
+            else: 
+                # This line is implement sigma_t ** 2 = beta_t
+                noise_scaled = noise * extract(self.var_scheduler.betas, t, xt).sqrt()
             x_t_prev = torch.where(noise_cond.view(-1, *([1] * (len(xt.shape) - 1))), 
-                           x_t_prev + noise, 
+                           x_t_prev + noise_scaled, 
                            x_t_prev)
         else:
         # Current code for single timestep
             if t.item() > 0:
-                x_t_prev += extract(self.var_scheduler.betas, t, xt).sqrt() * torch.randn_like(xt)
+                if use_sigma_is_beta:
+                    # This line try to implement sigma_t ** 2 = ((1 - alpha_bar_{t-1}) / (1 - alpha_bar_t)) * beta_t
+                    alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t - 1, xt)
+                    alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, xt)
+                    beta_t = extract(self.var_scheduler.betas, t, xt)
+                    sigma_t = ((1 - alphas_cumprod_t_prev) / (1 - alphas_cumprod_t)) * beta_t
+                    noise_scaled = noise * sigma_t.sqrt()
+                    x_t_prev = x_t_prev + noise_scaled
+                
+                else:
+                    # This line is implement sigma_t ** 2 = beta_t
+                    x_t_prev += extract(self.var_scheduler.betas, t, xt).sqrt() * noise
 
 
         #######################
         return x_t_prev
 
     @torch.no_grad()
-    def p_sample_loop(self, shape):
+    def p_sample_loop(self, shape, use_sigma_is_beta=False):
         """
         The loop of the reverse process of DDPM.
 
@@ -165,7 +187,7 @@ class DiffusionModule(nn.Module):
 
         for t in self.var_scheduler.timesteps:
             t_tensor = torch.tensor([t]).to(self.device)
-            xt = self.p_sample(xt, t_tensor)
+            xt = self.p_sample(xt, t_tensor, use_sigma_is_beta=use_sigma_is_beta)
         x0_pred = xt
         ######################
         return x0_pred
@@ -259,40 +281,186 @@ class DiffusionModule(nn.Module):
         ######################
         return loss
     
+##################### THIS PART FOR IMPLEMENTING MEAN MUY PREDICTOR #####################
     @torch.no_grad()
-    def muy_tilda(self, x_t, x0, t):
-        """
-        Compute the muy_tilda in Equation 1 in slide 12 lecture 4. 
-        """
+    def p_sample_mu(self, xt, t, use_sigma_is_beta=False):
+        noise = torch.randn_like(xt) if t > 0 else torch.zeros_like(xt)
+        if isinstance(t, int):
+            t = torch.tensor([t]).to(self.device)
         
-        # Use extract function for proper batch handling
-        alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, x0)
-        alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t-1, x0)
-        betas_t = extract(self.var_scheduler.betas, t, x0)
+        # Extract constants
+        alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t - 1, xt)
+        alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, xt)
+        betas_t = extract(self.var_scheduler.betas, t, xt)
+        sigma_t = ((1 - alphas_cumprod_t_prev) / (1 - alphas_cumprod_t)) * betas_t
+        # Predict mu
+        mu_pred = self.network(xt, t)
         
-        weighting_term_xt = alphas_cumprod_t.sqrt() * (1.0 - alphas_cumprod_t_prev) / (1.0 - alphas_cumprod_t)
-        weighting_term_x0 = alphas_cumprod_t_prev.sqrt() * betas_t / (1.0 - alphas_cumprod_t) 
-        weighting_term_x0 = weighting_term_x0.to(x0.device)
-        weighting_term_xt = weighting_term_xt.to(x0.device)
-        muy_tilda = weighting_term_xt * x_t + weighting_term_x0 * x0
-        return muy_tilda.to(x0.device)
+        if t.ndim > 0 and t.shape[0] > 1:
+            # handle batch of timesteps cases
+            noise_cond = t > 0
+            if use_sigma_is_beta:
+                sigma_t = extract(self.var_scheduler.betas, t, xt)
+            noise_scaled = noise * sigma_t.sqrt()
+            mu_prev = torch.where(noise_cond.view(-1, *([1] * (len(xt.shape) - 1))),
+                           mu_pred + noise_scaled, 
+                           mu_pred)
+        else:
+            # Current code for single timestep
+            if t.item() > 0:
+                if use_sigma_is_beta:
+                    sigma_t = extract(self.var_scheduler.betas, t, xt)
+                noise_scaled = noise * sigma_t.sqrt()
+                mu_prev = mu_pred + noise_scaled
+            else:
+                mu_prev = mu_pred
+        return mu_prev
 
-    def compute_loss_mean_predictor(self, x0):
+    @torch.no_grad()
+    def p_sample_loop_mu(self, shape, use_sigma_is_beta=False):
         """
-        Equation 1 in slide 12 lecture 4.
+        The loop of the reverse process of DDPM for mu predictor.
+
+        Input:
+            shape (`Tuple`): The shape of output. e.g., (num particles, 2)
+        Output:
+            mu_pred (`torch.Tensor`): The final denoised output through the DDPM reverse process.
         """
+        ######## TODO ########
+        # DO NOT change the code outside this part.
+        # sample mu based on Algorithm 2 of DDPM paper.
+        #mu_pred = torch.zeros(shape).to(self.device)
+
+        xt = torch.randn(shape).to(self.device)
+
+        for t in self.var_scheduler.timesteps[:-1]:
+            t_tensor = torch.tensor([t]).to(self.device)
+            xt = self.p_sample_mu(xt, t_tensor, use_sigma_is_beta=use_sigma_is_beta)
+        mu_pred = xt
+        ######################
+        return mu_pred
+    
+    def compute_loss_mu_predictor(self, x0):
+        """
+        Compute the loss for mu predictor.
+        This loss is used to train the mu estimating network.
+        Input:
+            x0 (`torch.Tensor`): clean data
+        Output:
+            loss: the computed loss to be backpropagated.
+        """
+        ######## TODO ########
+        # DO NOT change the code outside this part.
+        # compute mu predictor loss.
         batch_size = x0.shape[0]
         t = (
             torch.randint(1, self.var_scheduler.num_train_timesteps, size=(batch_size,))
             .to(x0.device)
             .long()
-        ) # since we use t - 1, cannot use t = 0
+        )
         noise = torch.randn_like(x0)
-        x_t = self.q_sample(x0, t, noise)  # Noisy data at timestep t
-        muy_tilda = self.muy_tilda(x_t, x0, t)
-        muy_theta = self.network(x_t, t)
-        loss = F.mse_loss(muy_theta, muy_tilda, reduction="mean")
+        xt = self.q_sample(x0, t, noise=noise)
+        alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t - 1, xt)
+        alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, xt)
+        alphas_t = extract(self.var_scheduler.alphas, t, xt)
+        betas_t = extract(self.var_scheduler.betas, t, xt)
+        weighting_term_xt = alphas_t.sqrt() * (1.0 - alphas_cumprod_t_prev) / (1.0 - alphas_cumprod_t)
+        weighting_term_x0 = alphas_cumprod_t_prev.sqrt() * betas_t/ (1.0 - alphas_cumprod_t)
+        mu_gt = weighting_term_xt * xt + weighting_term_x0 * x0
+        mu_pred = self.network(xt, t)
+        loss = F.mse_loss(mu_pred, mu_gt, reduction="mean")
         return loss
+
+################ This part is for x0 predictor######################
+    @torch.no_grad()
+    def p_sample_x0(self, xt, t, use_sigma_is_beta=False):
+        noise = torch.randn_like(xt) if t > 0 else torch.zeros_like(xt)
+        if isinstance(t, int):
+            t = torch.tensor([t]).to(self.device)
+
+        # Extract constants
+        alphas_cumprod_t_prev = extract(self.var_scheduler.alphas_cumprod, t - 1, xt) 
+        alphas_cumprod_t = extract(self.var_scheduler.alphas_cumprod, t, xt)
+        betas_t = extract(self.var_scheduler.betas, t, xt)
+        sigma_t = ((1 - alphas_cumprod_t_prev) / (1 - alphas_cumprod_t)) * betas_t
+        alphas_t = extract(self.var_scheduler.alphas, t, xt)
+
+        # Predict x0_hat
+        x0_pred = self.network(xt, t)
+
+        # Compute the weighting terms
+        weighting_term_xt = alphas_t.sqrt() * (1.0 - alphas_cumprod_t_prev) / (1.0 - alphas_cumprod_t)
+        weighting_term_x0 = alphas_cumprod_t_prev.sqrt() * betas_t / (1.0 - alphas_cumprod_t)
+
+        if t.ndim > 0 and t.shape[0] > 1:
+            # handle batch of timesteps cases
+            noise_cond = t > 0
+            if use_sigma_is_beta:
+                sigma_t = extract(self.var_scheduler.betas, t, xt)
+            noise_scaled = noise * sigma_t.sqrt()
+            xt_prev = weighting_term_xt * xt + weighting_term_x0 * x0_pred
+            xt_prev = torch.where(noise_cond.view(-1, *([1] * (len(xt.shape) - 1))),
+                           xt_prev + noise_scaled, 
+                           xt_prev)
+        else:   
+            # Current code for single timestep
+            if t.item() > 0:
+                if use_sigma_is_beta:
+                    sigma_t = extract(self.var_scheduler.betas, t, xt)
+                noise_scaled = noise * sigma_t.sqrt()
+                xt_prev = weighting_term_xt * xt + weighting_term_x0 * x0_pred + noise_scaled
+            else:
+                xt_prev = weighting_term_xt * xt + weighting_term_x0 * x0_pred
+        return xt_prev
+            
+    @torch.no_grad()
+    def p_sample_loop_x0(self, shape, use_sigma_is_beta=False):
+        """
+        The loop of the reverse process of DDPM for x0 predictor.
+
+        Input:
+            shape (`Tuple`): The shape of output. e.g., (num particles, 2)
+        Output:
+            x0_pred (`torch.Tensor`): The final denoised output through the DDPM reverse process.
+        """
+        ######## TODO ########
+        # DO NOT change the code outside this part.
+        # sample x0 based on Algorithm 2 of DDPM paper.
+        #x0_pred = torch.zeros(shape).to(self.device)
+
+        xt = torch.randn(shape).to(self.device)
+
+        for t in self.var_scheduler.timesteps[:-1]:
+            t_tensor = torch.tensor([t]).to(self.device)
+            xt = self.p_sample_x0(xt, t_tensor, use_sigma_is_beta=use_sigma_is_beta)
+        x0_pred = xt
+        ######################
+        return x0_pred
+    
+    def compute_loss_x0_predictor(self, x0):
+        """
+        Compute the loss for x0 predictor.
+        This loss is used to train the x0 estimating network.
+        Input:
+            x0 (`torch.Tensor`): clean data
+        Output:
+            loss: the computed loss to be backpropagated.
+        """
+        ######## TODO ########
+        # DO NOT change the code outside this part.
+        # compute x0 predictor loss.
+        batch_size = x0.shape[0]
+        t = (
+            torch.randint(1, self.var_scheduler.num_train_timesteps, size=(batch_size,))
+            .to(x0.device)
+            .long()
+        )
+        noise = torch.randn_like(x0)
+        xt = self.q_sample(x0, t, noise=noise)
+        x0_pred = self.network(xt, t)
+        loss = F.mse_loss(x0_pred, x0, reduction="mean")
+        return loss
+                    
 
     def save(self, file_path):
         hparams = {
