@@ -154,8 +154,19 @@ def main(args):
                     print("Enabling CFG sampling.")
                     ddpm.eval()
                     # For class 1 
-                    class_label_1 = torch.tensor([1], dtype=torch.long).to(config.device)
-                    samples = ddpm.sample(batch_size=1, return_traj=True, class_label=class_label_1, guidance_scale=7.5) # use guidance scale as in sample.py
+                    print()
+                    print(f"Step {step}, logging samples to wandb with CFG.")
+                    print("####################### Sample category 1 #######################")
+                    class_labels = torch.tensor([1, 2, 3], dtype=torch.long).to(config.device)
+                    samples = ddpm.sample(batch_size=3, return_traj=True, class_label=class_labels, guidance_scale=7.5) # use guidance scale as in sample.py
+                    videos = trajectory_to_video(samples)
+                    wandb_videos = []
+                    for i, video in enumerate(videos):
+                        assert video.shape == (1001, 3, 64, 64), f"Expected video shape (1001, 3, 64, 64), got {video.shape}"
+                        wandb_videos.append(wandb.Video(video, fps=30, format="mp4", caption=f"cfg_sample_step_{step}_class_{i+1}"))
+                    wandb.log(
+                        {f"samples_step_{step}": wandb_videos}, step=step
+                    )
                     ddpm.train()
                 else:
                     ddpm.eval()
