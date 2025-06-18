@@ -31,4 +31,4 @@ cd $PBS_O_WORKDIR
 cd image_diffusion_todo
 
 ## Run the script
-python train.py
+python train.py --use_cfg

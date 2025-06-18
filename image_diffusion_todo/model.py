@@ -27,6 +27,8 @@ class DiffusionModule(nn.Module):
             if self.network.training:
                 assert not torch.any(class_label == 0)
                 noise_pred = self.network(x_t, timestep=timestep, class_label=class_label)
+            else:
+                noise_pred = self.network(x_t, timestep=timestep, class_label=class_label) # normally not run here, except need loss for inference
         else:
             noise_pred = self.network(x_t, timestep=timestep)
         # The loss is the mean squared error between the predicted noise and the true noise.     

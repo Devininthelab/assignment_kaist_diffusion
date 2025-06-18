@@ -156,6 +156,7 @@ def main(args):
                     # For class 1 
                     class_label_1 = torch.tensor([1], dtype=torch.long).to(config.device)
                     samples = ddpm.sample(batch_size=1, return_traj=True, class_label=class_label_1, guidance_scale=7.5) # use guidance scale as in sample.py
+                    ddpm.train()
                 else:
                     ddpm.eval()
                     print()
