@@ -23,7 +23,12 @@ class DiffusionModule(nn.Module):
         if noise is None:
             noise = torch.randn_like(x0)
         x_t, noise = self.var_scheduler.add_noise(x0, timestep, noise)
-        noise_pred = self.network(x_t, timestep=timestep)
+        if self.network.use_cfg and class_label is not None:
+            if self.network.training:
+                assert not torch.any(class_label == 0)
+                noise_pred = self.network(x_t, timestep=timestep, class_label=class_label)
+        else:
+            noise_pred = self.network(x_t, timestep=timestep)
         # The loss is the mean squared error between the predicted noise and the true noise.     
         loss = F.mse_loss(noise_pred, noise)
         ######################
@@ -57,7 +62,7 @@ class DiffusionModule(nn.Module):
             # create a tensor of shape (2*batch_size,) where the first half is filled with zeros (i.e., null condition).
             assert class_label is not None
             assert len(class_label) == batch_size, f"len(class_label) != batch_size. {len(class_label)} != {batch_size}"
-            raise NotImplementedError("TODO")
+            class_label = torch.cat([torch.zeros(batch_size, device=self.device, dtype=torch.long), class_label]) # null condition, class condition
             #######################
 
         traj = [x_T]
@@ -66,7 +71,11 @@ class DiffusionModule(nn.Module):
             if do_classifier_free_guidance:
                 ######## TODO ########
                 # Assignment 2. Implement the classifier-free guidance.
-                raise NotImplementedError("TODO")
+                # pass the class_label to the network
+                nois_pred_null = self.network(x_t, timestep=t.to(self.device), class_label=class_label[:batch_size]) # null condition
+                nois_pred_class = self.network(x_t, timestep=t.to(self.device), class_label=class_label[batch_size:]) # class condition
+                noise_pred = (1.0 + guidance_scale) * nois_pred_class - guidance_scale * nois_pred_null
+
                 #######################
             else:
                 noise_pred = self.network(x_t, timestep=t.to(self.device))

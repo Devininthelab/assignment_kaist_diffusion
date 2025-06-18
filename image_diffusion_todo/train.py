@@ -85,7 +85,7 @@ def main(args):
     run = wandb.init(
         entity="winvswon78-nanyang-technological-university-singapore",   
         project="diffusion_ahq",
-        name=f"diffusion-{args.sample_method}-{now}",
+        name=f"cfg_diffusion-{args.sample_method}-{now}" if args.use_cfg else f"diffusion-{args.sample_method}-{now}",
         config=config,
         dir=save_dir,
     )
@@ -149,20 +149,27 @@ def main(args):
                 ddpm.save(f"{save_dir}/last.ckpt")
                 ddpm.train()
 
-            if step % config.sample_log_interval == 0:  # Fixed typo in sample_log_interval
-                ddpm.eval()
-                print()
-                print(f"Step {step}, logging samples to wandb.")
-                samples = ddpm.sample(batch_size=1, return_traj=True)
-                videos = trajectory_to_video(samples)
-                wandb_videos = []
-                for i, video in enumerate(videos):
-                    assert video.shape == (1001, 3, 64, 64), f"Expected video shape (1001, 3, 64, 64), got {video.shape}"
-                    wandb_videos.append(wandb.Video(video, fps=30, format="mp4"))
-                wandb.log(
-                    {f"samples_step_{step}": wandb_videos}, step=step
-                )
-                ddpm.train()
+            if step % config.sample_log_interval == 0: 
+                if args.use_cfg:
+                    print("Enabling CFG sampling.")
+                    ddpm.eval()
+                    # For class 1 
+                    class_label_1 = torch.tensor([1], dtype=torch.long).to(config.device)
+                    samples = ddpm.sample(batch_size=1, return_traj=True, class_label=class_label_1, guidance_scale=7.5) # use guidance scale as in sample.py
+                else:
+                    ddpm.eval()
+                    print()
+                    print(f"Step {step}, logging samples to wandb.")
+                    samples = ddpm.sample(batch_size=1, return_traj=True)
+                    videos = trajectory_to_video(samples)
+                    wandb_videos = []
+                    for i, video in enumerate(videos):
+                        assert video.shape == (1001, 3, 64, 64), f"Expected video shape (1001, 3, 64, 64), got {video.shape}"
+                        wandb_videos.append(wandb.Video(video, fps=30, format="mp4"))
+                    wandb.log(
+                        {f"samples_step_{step}": wandb_videos}, step=step
+                    )
+                    ddpm.train()
     
             img, label = next(train_it)
             img, label = img.to(config.device), label.to(config.device)
@@ -187,16 +194,16 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
         "--train_num_steps",
         type=int,
-        default=10000,
+        default=100000,
         help="the number of model training steps.",
     )
     parser.add_argument("--warmup_steps", type=int, default=200)
     parser.add_argument("--log_interval", type=int, default=200)
-    parser.add_argument("--sample_log_interval", type=int, default=500)
+    parser.add_argument("--sample_log_interval", type=int, default=2000)
     parser.add_argument(
         "--max_num_images_per_cat",
         type=int,

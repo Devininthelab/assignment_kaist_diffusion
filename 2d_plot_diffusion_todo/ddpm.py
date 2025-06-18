@@ -214,8 +214,17 @@ class DiffusionModule(nn.Module):
             alpha_prod_t_prev = extract(self.var_scheduler.alphas_cumprod, t_prev, xt)
         else:
             alpha_prod_t_prev = torch.ones_like(alpha_prod_t)
+        betas = extract(self.var_scheduler.betas, t, xt)
+        sigma_t_squared = (1 - alpha_prod_t_prev) / (1 - alpha_prod_t) * betas * eta**2
+        
+        # Implement the equation 12 in DDIM paper
+        predicted_noise = self.network(xt, t)
+        predicted_x0 = (xt - (1 - alpha_prod_t).sqrt() * predicted_noise) / alpha_prod_t.sqrt()
+        direction_pointing_to_xt = (1 - alpha_prod_t_prev - sigma_t_squared).sqrt() * predicted_noise
 
-        x_t_prev = xt
+        random_noise = torch.randn_like(xt) * sigma_t_squared.sqrt() if t_prev >= 0 else torch.zeros_like(xt)
+
+        x_t_prev = alpha_prod_t_prev.sqrt() * predicted_x0 + direction_pointing_to_xt + random_noise
 
         ######################
         return x_t_prev
@@ -246,9 +255,11 @@ class DiffusionModule(nn.Module):
         timesteps = torch.from_numpy(timesteps)
         prev_timesteps = timesteps - step_ratio
 
-        xt = torch.zeros(shape).to(self.device)
+        xt = torch.randn(shape).to(self.device)
         for t, t_prev in zip(timesteps, prev_timesteps):
-            pass
+            t_tensor = torch.tensor([t]).to(self.device)
+            t_prev_tensor = torch.tensor([t_prev]).to(self.device)
+            xt = self.ddim_p_sample(xt, t_tensor, t_prev_tensor, eta=eta)
 
         x0_pred = xt
 

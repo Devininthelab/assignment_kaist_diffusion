@@ -74,7 +74,6 @@ class UNet(nn.Module):
     def forward(self, x, timestep, class_label=None):
         # Timestep embedding
         temb = self.time_embedding(timestep)
-
         if self.use_cfg and class_label is not None:
             if self.training:
                 assert not torch.any(class_label == 0) # 0 for null.
@@ -82,13 +81,16 @@ class UNet(nn.Module):
                 ######## TODO ########
                 # DO NOT change the code outside this part.
                 # Assignment 2. Implement random null conditioning in CFG training.
-                raise NotImplementedError("TODO")
+                # Randomly mask some class labels to 0 (null condition) during training.
+                mask = torch.rand(class_label.shape[0], device=class_label.device) < self.cfg_dropout
+                class_label[mask] = 0
                 #######################
             
             ######## TODO ########
             # DO NOT change the code outside this part.
             # Assignment 2. Implement class conditioning
-            raise NotImplementedError("TODO")
+            class_emb = self.class_embedding(class_label)
+            temb = temb + class_emb
             #######################
 
         # Downsampling
